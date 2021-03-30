@@ -1,0 +1,264 @@
+---
+ - name: "Install Mail Server"
+   hosts: postfix
+   become: true
+   gather_facts: true
+   vars:
+
+   tasks:
+     - name: 'Change hostname'
+       hostname:
+         name: mail.test.loc
+
+     - name: 'Disalbe SELinux'
+       shell: setenforce 0 && sed -i 's/^SELINUX=.*/SELINUX=disabled/g' /etc/selinux/config
+
+     - name: 'Install requres packegs'
+       yum:
+         name:
+           - nano
+           - net-tools
+           - bind-utils
+           - postfix
+           - dovecot
+           - mariadb-server
+           - dovecot-mysql
+           - epel-release
+         state: present
+
+     - name: 'Install httpd and php'
+       yum:
+         name:
+           - httpd
+           - php
+           - php-mysql
+           - php-mbstring
+           - php-imap
+         state: present
+
+     - name: 'Configure apache for user postifxadmin'
+       template:
+         src: ../templates/pfadmin.conf.j2
+         dest: /etc/httpd/conf.d/pfadmin.conf
+       notify:
+         - restart httpd
+
+     - name: 'Start MariaDB-server'
+       systemd:
+         name: mariadb
+         state: restarted
+         enabled: yes
+
+     - name: 'Start mysql instalation'
+       script: ../scripts/mysql_installation_script.sh
+
+     - name: 'Create postfix DB'
+       script: ../scripts/create_database_postfix.sh
+
+
+     - name: 'Create postfixadmin directory for nginx'
+       file:
+         path: /var/www/postfixadmin
+         state: directory
+
+     - name: 'Extract postfiadmin into /var/www/postfixadmin'
+       unarchive:
+         src: ../files/postfixadmin.tar
+         dest: /var/www/postfixadmin/
+
+     - name: 'Create directory template_c for postfixadmin'
+       file:
+         path: /var/www/postfixadmin/templates_c
+         state: directory
+
+     - name: 'Change owner and group'
+       file:
+         path: /var/www/postfixadmin/
+         owner: apache
+         group: apache
+         state: directory
+         recurse: yes
+
+     - name: 'Configure postfixadmin with template'
+       template:
+         src: ../templates/config.local.php.j2
+         dest: /var/www/postfixadmin/config.local.php
+
+     - name: 'Add group for vmail'
+       group:
+         name: vmail
+         gid: 1024
+
+     - name: 'Add user for vamil'
+       user:
+         name: vmail
+         group: vmail
+         uid: 1024
+         home: /home/mail/
+#
+#     - name: 'Change permission'
+#       file:
+#         path: /home/vmail/
+#         mode: 1777
+#         recurse: yes
+#         state: directory
+
+
+     - name: 'Configure main.cf from template'
+       template:
+         src: ../templates/main.cf.j2
+         dest: /etc/postfix/main.cf
+
+     - name: 'Configure master.cf from template'
+       template:
+         src: ../templates/master.cf.j2
+         dest: /etc/postfix/master.cf
+
+     - name: 'Copy config for virtual alias'
+       template:
+         src: ../templates/mysql_virtual_alias_maps.cf.j2
+         dest: /etc/postfix/mysql_virtual_alias_maps.cf
+
+     - name: 'Copy config for virtual domains'
+       template:
+         src: ../templates/mysql_virtual_domains_maps.cf.j2
+         dest: /etc/postfix/mysql_virtual_domains_maps.cf
+
+     - name: 'Copy config for virtual mailbox'
+       template:
+         src: ../templates/mysql_virtual_mailbox_maps.cf.j2
+         dest: /etc/postfix/mysql_virtual_mailbox_maps.cf
+       notify:
+         - restart postfix
+
+     - name: 'Copy 10-mail.conf for dovecot from template'
+       template:
+         src: ../templates/10-mail.conf.j2
+         dest: /etc/dovecot/conf.d/10-mail.conf
+
+     - name: 'Copy 10-masteer.conf for dovecot from template'
+       template:
+         src: ../templates/10-master.conf.j2
+         dest: /etc/dovecot/conf.d/10-master.conf
+
+     - name: 'Copy 10-auth.conf for dovecot from template'
+       template:
+         src: ../templates/10-auth.conf.j2
+         dest: /etc/dovecot/conf.d/10-auth.conf
+
+     - name: 'Copy 10-ssl.conf for dovecot from template'
+       template:
+         src: ../templates/10-ssl.conf.j2
+         dest: /etc/dovecot/conf.d/10-ssl.conf
+
+     - name: 'Copy 15-lda.conf for dovecot from template'
+       template:
+         src: ../templates/15-lda.conf.j2
+         dest: /etc/dovecot/conf.d/15-lda.conf
+
+     - name: 'Copy auth-sql.conf for dovecot from template'
+       template:
+         src: ../templates/auth-sql.conf.ext.j2
+         dest: /etc/dovecot/conf.d/auth-sql.conf.ext
+
+     - name: 'Copy dovecot-sql.conf.ext for dovecot from template'
+       template:
+         src: ../templates/dovecot-sql.conf.ext.j2
+         dest: /etc/dovecot/dovecot-sql.conf.ext
+
+     - name: 'Copy dovecot.conf from template'
+       template:
+         src: ../templates/dovecot.conf.j2
+         dest: /etc/dovecot/dovecot.conf
+
+     - name: 'Make dir for ssl certs'
+       file:
+         name: /etc/ssl/mail
+         state: directory
+
+     - name: 'Create certs'
+       shell: openssl req -new -x509 -days 1461 -nodes -out /etc/ssl/mail/public.pem -keyout /etc/ssl/mail/private.key -subj "/C=RU/ST=SPb/L=SPb/O=Global Security/OU=IT Department/CN=mail.test.loc"
+       notify:
+         - restart dovecot
+
+     - name: 'Create webmail directory for roundcoube'
+       file:
+         path: /var/www/webmail
+         state: directory
+
+     - name: 'Extract postfiadmin into /var/www/postfixadmin'
+       unarchive:
+         src: ../files/roundcubemail.tar
+         dest: /var/www/webmail/
+
+     - name: 'Change owner and group'
+       file:
+         path: /var/www/webmail/
+         owner: apache
+         group: apache
+         state: directory
+         recurse: yes
+
+     - name: 'Configure webmail from template'
+       template:
+         src: ../templates/config.inc.php_webmail.j2
+         dest: /var/www/webmail/config/config.inc.php_webmail.j2
+         owner: apache
+         group: apache
+
+     - name: 'Create postfix DB'
+       script: ../scripts/create_database_webmail.sh
+
+     - name: 'upload db from template'
+       shell: mysql -uroot -pvagrant roundcubemail < /var/www/webmail/SQL/mysql.initial.sql
+
+     - name: 'Install additional dependens'
+       yum:
+         name:
+           - php-pear
+           - php-mcrypt
+           - php-intl
+           - php-ldap
+           - php-pear-Net-SMTP
+           - php-pear-Net-IDNA2
+           - php-pear-Mail-Mime
+
+     - name: 'Edit timezone php.ini'
+       shell: sed -i -r 's/;date.timezone\ =/date.timezone\ =\ Asia\/Almaty/g' /etc/php.ini
+
+     - name: 'Add webmail to httpd'
+       template:
+         src: ../templates/webmail.conf.j2
+         dest: /etc/httpd/conf.d/webmail.conf
+       notify:
+         - restart httpd
+
+   handlers:
+     - name: restart httpd
+       systemd:
+         name: httpd
+         state: restarted
+         enabled: yes
+
+     - name: restart postfix
+       systemd:
+         name: postfix
+         state: restarted
+         enabled: yes
+
+     - name: restart dovecot
+       systemd:
+         name: dovecot
+         state: restarted
+         enabled: yes
+
+
+
+
+
+
+
+
+
+
+
